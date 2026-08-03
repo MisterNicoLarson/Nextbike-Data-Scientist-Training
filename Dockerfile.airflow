@@ -1,0 +1,9 @@
+FROM apache/airflow:3.3.0-python3.12
+
+COPY requirements.txt /requirements.txt
+
+USER airflow
+RUN pip install --no-cache-dir -r /requirements.txt \
+    && pip install --no-cache-dir apache-airflow-providers-fab
+
+ENV PYTHONPATH="/opt/airflow/src:${PYTHONPATH}"
