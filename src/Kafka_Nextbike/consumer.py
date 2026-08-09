@@ -1,10 +1,12 @@
 import json
 import logging
 import os
+import time
 from collections import defaultdict, deque
 from datetime import datetime
 
 from kafka import KafkaConsumer
+from kafka.errors import KafkaError, NoBrokersAvailable
 from sqlalchemy import create_engine, text
 
 logging.basicConfig(
@@ -28,13 +30,58 @@ DATABASE_URL = (
 )
 engine = create_engine(DATABASE_URL)
 
-LOW_BIKE_THRESHOLD = 2
-WARNING_MINUTES = 30
 WINDOW_SIZE = 2 
 station_history: dict[int, deque] = defaultdict(lambda: deque(maxlen=WINDOW_SIZE))
 last_alert_status: dict[int, str] = {}
 last_maintenance_status: dict[int, bool] = {}
 station_info_cache: dict[int, dict] = {}
+
+MAX_RETRY_DELAY_SECONDS = 60
+INITIAL_RETRY_DELAY_SECONDS = 2
+
+"""
+    Connects to the Kafka broker, retrying with exponential backoff
+    until a connection is successfully established.
+
+    Returns:
+        KafkaConsumer: The connected Kafka consumer instance.
+"""
+def connect_to_kafka() -> KafkaConsumer:
+    delay = INITIAL_RETRY_DELAY_SECONDS
+    attempt = 1
+
+    while True:
+        try:
+            logger.info(
+                "Connecting to Kafka broker (attempt %d): %s",
+                attempt, KAFKA_BOOTSTRAP_SERVERS,
+            )
+            consumer = KafkaConsumer(
+                TOPIC_SNAPSHOTS,
+                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+                key_deserializer=lambda k: k.decode("utf-8") if k else None,
+                auto_offset_reset="latest",
+                enable_auto_commit=True,
+                group_id="nextbike-alert-consumer",
+            )
+            logger.info("Connected to Kafka broker successfully")
+            return consumer
+
+        except NoBrokersAvailable:
+            logger.warning(
+                "No Kafka broker available, retrying in %ds (attempt %d)",
+                delay, attempt,
+            )
+        except KafkaError:
+            logger.exception(
+                "Unexpected Kafka error while connecting, retrying in %ds (attempt %d)",
+                delay, attempt,
+            )
+
+        time.sleep(delay)
+        delay = min(delay * 2, MAX_RETRY_DELAY_SECONDS)
+        attempt += 1
 
 """
     Returns station information from the database or cache.
@@ -75,7 +122,9 @@ def get_station_info(station_id):
     return info
 
 """
-    Determines the alert status based on the station history.
+    Determines the alert status based on a bike-count threshold relative
+    to the station's total capacity, and estimates the time until the
+    station runs out of bikes.
 
     Args:
         history: A list of recent station snapshots.
@@ -83,9 +132,29 @@ def get_station_info(station_id):
     Returns:
         tuple: The alert status and the estimated time until the station is empty.
 """
-def compute_status(history):
+def compute_flexible_status(history):
     current = history[-1]
     previous = history[0] if len(history) > 1 else current
+
+    max_bike = current.get("total_bikes") or 0
+    available_bike = current["available_bikes"]
+
+    if max_bike <= 0:
+        logger.warning(
+            "Station %s: invalid total_bikes value (%s), skipping status computation",
+            current["station_id"], current.get("total_bikes"),
+        )
+        return "UNKNOWN", None
+
+    warning_alert = max_bike / 3
+    critical_alert = max_bike / 4
+
+    if available_bike <= critical_alert:
+        status = "CRITICAL"
+    elif available_bike <= warning_alert:
+        status = "WARNING"
+    else:
+        status = "OK"
 
     bike_delta = current["available_bikes"] - previous["available_bikes"]
     depletion_rate = max(0, -bike_delta / 5)
@@ -93,12 +162,6 @@ def compute_status(history):
     estimated_empty_minutes = None
     if depletion_rate > 0:
         estimated_empty_minutes = current["available_bikes"] / depletion_rate
-
-    status = "OK"
-    if current["available_bikes"] <= LOW_BIKE_THRESHOLD:
-        status = "CRITICAL"
-    elif estimated_empty_minutes is not None and estimated_empty_minutes < WARNING_MINUTES:
-        status = "WARNING"
 
     return status, estimated_empty_minutes
 
@@ -166,10 +229,10 @@ def handle_message(record):
     history = station_history[station_id]
     history.append(record)
 
-    status, eta = compute_status(history)
+    status, eta = compute_flexible_status(history)
     previous_status = last_alert_status.get(station_id, "OK")
 
-    if status != "OK" and status != previous_status:
+    if status not in ("OK", "UNKNOWN") and status != previous_status:
         message = f"Station {station_label}: {int(record['available_bikes'])} bike(s) left"
         if eta is not None:
             message += f", estimated to run out in ~{eta:.0f} min"
@@ -191,19 +254,9 @@ def handle_message(record):
         None
 """
 def main():
-    logger.info("Connecting to Kafka broker: %s", KAFKA_BOOTSTRAP_SERVERS)
+    consumer = connect_to_kafka()
 
-    consumer = KafkaConsumer(
-        TOPIC_SNAPSHOTS,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        key_deserializer=lambda k: k.decode("utf-8") if k else None,
-        auto_offset_reset="latest",
-        enable_auto_commit=True,
-        group_id="nextbike-alert-consumer",
-    )
-
-    logger.info( "Started consuming messages from topic %s", TOPIC_SNAPSHOTS)
+    logger.info("Started consuming messages from topic %s", TOPIC_SNAPSHOTS)
 
     for message in consumer:
         try:
