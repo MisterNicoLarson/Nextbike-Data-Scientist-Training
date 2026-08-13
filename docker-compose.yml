@@ -18,7 +18,7 @@ x-airflow-common: &airflow-common
     POSTGRES_PORT: 5432
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   volumes:
-    - ./dags:/opt/airflow/dags
+    - ./nextbike_dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
     - ./data:/opt/airflow/data
     - ./logs:/opt/airflow/logs
