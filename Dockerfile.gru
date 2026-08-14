@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements-gru.txt /app/requirements-gru.txt
+RUN pip install --no-cache-dir -r requirements-gru.txt
+
+COPY src/GRU_Nextbike /app/GRU_Nextbike
+
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+CMD ["uvicorn", "GRU_Nextbike.service:app", "--host", "0.0.0.0", "--port", "8001"]

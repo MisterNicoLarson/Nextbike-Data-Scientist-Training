@@ -1,6 +1,7 @@
 import logging
-
+from pathlib import Path
 import requests
+import json
 
 
 CITY_API_URL = "https://maps.nextbike.net/maps/nextbike-live.json?list_cities=1"
@@ -55,4 +56,10 @@ def extract_json_from_api_nextbike():
                 city["country_name"] = city_infos[uid]["country"]
                 city["country"] = city_infos[uid]["country_code"]
 
-    return live_data
+    output_file = Path("/opt/airflow/data/raw/nextbike_raw.json")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(live_data, f, ensure_ascii=False)
+
+    return str(output_file)

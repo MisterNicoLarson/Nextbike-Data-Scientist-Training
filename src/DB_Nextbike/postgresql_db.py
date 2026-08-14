@@ -24,4 +24,6 @@ engine = create_engine(DATABASE_URL, echo=False)
         None
 """
 def init_db():
+    from DB_Nextbike.postgresql_db import engine
+    engine.dispose()  
     Base.metadata.create_all(engine)

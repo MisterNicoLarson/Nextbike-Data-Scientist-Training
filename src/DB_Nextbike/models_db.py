@@ -30,6 +30,7 @@ class Station(Base):
     city = relationship("City", back_populates="stations")
     snapshots = relationship("TaskStationSnapshot", back_populates="station")
     alerts = relationship("TaskAlert", back_populates="station")
+    alerts_ml = relationship("TaskAlertML", back_populates="station")
 
 class TaskStationSnapshot(Base):
     __tablename__ = "task_station_snapshot"
@@ -59,3 +60,19 @@ class TaskAlert(Base):
     severity = Column(String(20))
 
     station = relationship("Station", back_populates="alerts")
+
+
+class TaskAlertML(Base):
+    __tablename__ = "task_alert_ml"
+
+    id_TaskAlertML = Column(Integer, primary_key=True, autoincrement=True)
+    computed_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    station_id = Column(Integer, ForeignKey("station.station_id"), nullable=False)
+    model = Column(String(50), nullable=False)
+    estimated_empty_at = Column(TIMESTAMP(timezone=True))
+    minutes_remaining = Column(Float)
+    slope = Column(Float)
+    confidence = Column(Float)
+    message = Column(Text)
+
+    station = relationship("Station", back_populates="alerts_ml")

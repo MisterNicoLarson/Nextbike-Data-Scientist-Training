@@ -39,6 +39,11 @@ def transform_nextbike_raw(raw_data):
 
     execution_time = datetime.now(UTC)
 
+    ##### garde-fou : accepte encore un JSON stringifié si jamais reçu ainsi #####
+    if isinstance(raw_data, str):
+        raw_data = json.loads(raw_data)
+    ##### fin ajout #####
+
     data = raw_data  
 
     cities = {}
@@ -82,8 +87,10 @@ def transform_nextbike_raw(raw_data):
                     "critical_bike_threshold": 2,
                 }
 
-                bikes = place.get("bikes")
-                free_racks = place.get("free_racks")
+                ##### conversion explicite en numérique avant tout calcul #####
+                bikes = pd.to_numeric(place.get("bikes"), errors="coerce")
+                free_racks = pd.to_numeric(place.get("free_racks"), errors="coerce")
+                ##### fin correction #####
 
                 snapshots.append(
                     {
@@ -91,7 +98,7 @@ def transform_nextbike_raw(raw_data):
                         "station_id": station_id,
                         "available_bikes": bikes,
                         "free_racks": free_racks,
-                        "total_bikes": (bikes or 0) + (free_racks or 0),
+                        ##### total_bikes recalculé une seule fois, en aval, sur les colonnes déjà numériques (voir plus bas) #####
                         "maintenance":  bool(place.get("maintenance", False)),
                     }
                 )
@@ -108,10 +115,13 @@ def transform_nextbike_raw(raw_data):
     for column in ["latitude", "longitude"]:
         stations_df[column] = pd.to_numeric(stations_df[column], errors="coerce")
 
-    snapshots_df.dropna(subset=["station_id", "available_bikes", "free_racks", "total_bikes"], inplace=True)
+    ##### on retire les stations aux coordonnées invalides avant insertion #####
+    stations_df.dropna(subset=["latitude", "longitude"], inplace=True)
+    ##### fin ajout #####
+
     stations_df.drop_duplicates(subset=["station_id"], keep="last", inplace=True)
 
-    for column in ["available_bikes", "free_racks", "total_bikes"]:
+    for column in ["available_bikes", "free_racks"]:
         snapshots_df[column] = pd.to_numeric(snapshots_df[column], errors="coerce")
 
     snapshots_df.dropna(subset=["station_id", "available_bikes", "free_racks"], inplace=True)
@@ -120,13 +130,7 @@ def transform_nextbike_raw(raw_data):
         (snapshots_df["available_bikes"] >= 0) & (snapshots_df["free_racks"] >= 0)
     ]
 
-    snapshots_df = snapshots_df[
-        snapshots_df["total_bikes"]
-        ==
-        snapshots_df["available_bikes"]
-        +
-        snapshots_df["free_racks"]
-    ]
+    snapshots_df["total_bikes"] = snapshots_df["available_bikes"] + snapshots_df["free_racks"]
 
     valid_station_ids = set(stations_df["station_id"])
     snapshots_df = snapshots_df[snapshots_df["station_id"].isin(valid_station_ids)]

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_PATH = PROJECT_ROOT / "src"
@@ -10,16 +11,24 @@ from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from datetime import datetime, timedelta
 
-from src.ETL_Nextbike.extract import extract_json_from_api_nextbike
-from src.ETL_Nextbike.transform import transform_nextbike_raw
-from src.ETL_Nextbike.load import load_nextbike_processed
-from src.DB_Nextbike.postgresql_db import init_db  
+from ETL_Nextbike.extract import extract_json_from_api_nextbike
+from ETL_Nextbike.transform import transform_nextbike_raw
+from ETL_Nextbike.load import load_nextbike_processed
+from DB_Nextbike.postgresql_db import init_db
 
 default_args = {
-    "owner": "sia",
+    "owner": "nicolas",
     "retries": 3,
     "retry_delay": timedelta(minutes=1),
 }
+
+def transform_wrapper(**context):
+    raw_file = context["ti"].xcom_pull(task_ids="extract")
+
+    with open(raw_file, "r", encoding="utf-8") as f:
+        raw_data = json.load(f)
+
+    return transform_nextbike_raw(raw_data)
 
 with DAG(
     dag_id="nextbike_etl",
@@ -41,11 +50,12 @@ with DAG(
     python_callable=extract_json_from_api_nextbike
     )
 
+    ##### transform_task ne passe plus raw_data via un template Jinja op_kwargs #####
     transform_task = PythonOperator(
         task_id="transform",
-        python_callable=transform_nextbike_raw,
-        op_kwargs={"raw_data": "{{ ti.xcom_pull(task_ids='extract') }}"},
+        python_callable=transform_wrapper,
     )
+    ##### fin correction #####
 
     load = PythonOperator(
         task_id="load",
